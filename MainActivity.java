@@ -1,0 +1,31 @@
+package com.irtwaa.water;
+import android.app.*;import android.os.*;import android.content.*;import android.graphics.Color;import android.view.*;import android.widget.*;import android.database.Cursor;import java.text.*;import java.util.*;
+public class MainActivity extends Activity{
+ WaterDb db; LinearLayout root,logs; TextView count,remain,percent; int goal; String date; long lastId=-1; int lastMl=0; boolean dark=true;
+ String today(){return new SimpleDateFormat("yyyy-MM-dd",Locale.US).format(new Date());}
+ public void onCreate(Bundle b){super.onCreate(b);db=new WaterDb(this);goal=getSharedPreferences("p",0).getInt("goal",5000);date=today();if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=0)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},1);createChannel();draw();}
+ void createChannel(){if(Build.VERSION.SDK_INT>=26){NotificationChannel c=new NotificationChannel("water","تذكير المياه",NotificationManager.IMPORTANCE_HIGH);c.setDescription("تذكيرات شرب المياه");getSystemService(NotificationManager.class).createNotificationChannel(c);}}
+ void draw(){date=today();root=new LinearLayout(this);root.setOrientation(1);root.setPadding(24,24,24,18);root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);root.setBackgroundColor(dark?Color.BLACK:0xfff4f5f7);setContentView(root);
+ TextView title=txt("ارتواء",26);root.addView(title);
+ int total=db.total(date);count=txt(total+" مل",34);count.setGravity(Gravity.CENTER);root.addView(count);
+ percent=txt((goal==0?0:Math.min(100,total*100/goal))+"%",22);percent.setGravity(Gravity.CENTER);root.addView(percent);
+ remain=txt("المتبقي "+Math.max(0,goal-total)+" مل",18);remain.setGravity(Gravity.CENTER);root.addView(remain);
+ ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(goal);p.setProgress(total);p.setProgressTintList(android.content.res.ColorStateList.valueOf(0xff65a9ff));p.setMinimumHeight(18);root.addView(p);
+ TextView buttons=txt("تسجيل سريع",18);root.addView(buttons);
+ LinearLayout row=new LinearLayout(this);root.addView(row);for(int ml:new int[]{250,330,500,1000}){Button b=btn("+"+ml);row.addView(b,new LinearLayout.LayoutParams(0,100,1));b.setOnClickListener(v->add(ml));}
+ Button custom=btn("كمية مخصصة"),undo=btn("تراجع");root.addView(custom);root.addView(undo);
+ custom.setOnClickListener(v->{EditText e=new EditText(this);e.setInputType(2);e.setHint("الكمية بالمليلتر");new AlertDialog.Builder(this).setTitle("إضافة كمية").setView(e).setPositiveButton("إضافة",(a,x)->{try{add(Integer.parseInt(e.getText().toString()));}catch(Exception ex){Toast.makeText(this,"أدخل كمية صحيحة",0).show();}}).setNegativeButton("إلغاء",null).show();});
+ undo.setOnClickListener(v->{if(lastId!=-1){db.del(lastId);lastId=-1;draw();}});
+ Button settings=btn("الإعدادات والتذكيرات");root.addView(settings);settings.setOnClickListener(v->settings());
+ Button history=btn("السجل");root.addView(history);history.setOnClickListener(v->history());
+ logs=new LinearLayout(this);logs.setOrientation(1);root.addView(txt("سجلات اليوم",18));root.addView(logs);refreshLogs();
+ }
+ TextView txt(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(dark?Color.WHITE:Color.BLACK);t.setPadding(8,8,8,8);return t;}
+ Button btn(String s){Button b=new Button(this);b.setText(s);return b;}
+ void add(int ml){if(ml<=0)return;lastMl=ml;lastId=db.add(System.currentTimeMillis(),ml);draw();}
+ void refreshLogs(){Cursor c=db.today(date);while(c.moveToNext()){long id=c.getLong(0),ts=c.getLong(1);int ml=c.getInt(2);Button b=btn(new SimpleDateFormat("HH:mm",Locale.getDefault()).format(new Date(ts))+"  •  "+ml+" مل  (حذف)");logs.addView(b);b.setOnClickListener(v->{db.del(id);draw();});}c.close();}
+ void settings(){EditText g=new EditText(this);g.setInputType(2);g.setText(""+goal);new AlertDialog.Builder(this).setTitle("هدف المياه (مل)").setView(g).setPositiveButton("حفظ",(d,w)->{try{goal=Integer.parseInt(g.getText().toString());getSharedPreferences("p",0).edit().putInt("goal",goal).apply();draw();}catch(Exception e){}}).setNeutralButton("التذكيرات",(d,w)->reminders()).setNegativeButton("إلغاء",null).show();}
+ void reminders(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);EditText start=new EditText(this);start.setHint("وقت البداية HH:mm");start.setText("07:00");EditText end=new EditText(this);end.setHint("وقت النهاية HH:mm");end.setText("23:00");EditText interval=new EditText(this);interval.setHint("الفاصل بالدقائق: 30/60/90/120");interval.setText("60");l.addView(start);l.addView(end);l.addView(interval);new AlertDialog.Builder(this).setTitle("تذكيرات المياه").setView(l).setPositiveButton("تفعيل",(a,b)->{try{getSharedPreferences("p",0).edit().putString("start",start.getText().toString()).putString("end",end.getText().toString()).putInt("interval",Integer.parseInt(interval.getText().toString())).putBoolean("enabled",true).apply();schedule(this);Toast.makeText(this,"تم جدولة التذكيرات",0).show();}catch(Exception ex){Toast.makeText(this,"تحقق من البيانات",0).show();}}).setNeutralButton("إشعار تجريبي",(a,b)->{ReminderReceiver r=new ReminderReceiver();r.onReceive(this,new Intent());}).setNegativeButton("إلغاء",null).show();}
+ public static void schedule(Context c){AlarmManager am=(AlarmManager)c.getSystemService(ALARM_SERVICE);Intent i=new Intent(c,ReminderReceiver.class);PendingIntent pi=PendingIntent.getBroadcast(c,10,i,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);am.cancel(pi);SharedPreferences p=c.getSharedPreferences("p",0);int interval=p.getInt("interval",60);if(!p.getBoolean("enabled",false))return;long first=System.currentTimeMillis()+interval*60000L;if(Build.VERSION.SDK_INT>=23)am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,first,pi);else am.setRepeating(AlarmManager.RTC_WAKEUP,first,interval*60000L,pi);}
+ void history(){Cursor c=db.history();StringBuilder s=new StringBuilder();while(c.moveToNext()){s.append(c.getString(0)).append(" — ").append(c.getInt(1)).append(" مل (هدف ").append(c.getInt(2)).append(") ").append(c.getInt(1)>=c.getInt(2)?"✓":"").append("\n");}c.close();new AlertDialog.Builder(this).setTitle("السجل").setMessage(s.length()==0?"لا يوجد سجل بعد":s.toString()).setPositiveButton("إغلاق",null).show();}
+}
